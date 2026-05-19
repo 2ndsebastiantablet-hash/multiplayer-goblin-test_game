@@ -1,8 +1,10 @@
-const AFK_MS = 3 * 60 * 1000;
+const AFK_MS = 180000;
+const json = x => JSON.stringify(x);
+const code = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const code = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
-const json = data => JSON.stringify(data);
-
+function heightAt(x, z) {
+  return Math.max(0, Math.floor(Math.sin(x * .33) * 1.6 + Math.cos(z * .27) * 1.4 + Math.sin((x + z) * .18) * 1.2 + 3));
+}
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -15,126 +17,126 @@ export default {
 };
 
 export class RoomsDO {
-  constructor(state, env) {
-    this.state = state;
-    this.env = env;
+  constructor() {
     this.rooms = new Map();
     this.clients = new Map();
-    setInterval(() => this.checkAfk(), 1000);
+    setInterval(() => this.afk(), 1000);
   }
-
   async fetch(request) {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected websocket', { status: 426 });
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     const clientId = crypto.randomUUID();
     server.accept();
-    this.clients.set(clientId, { ws: server, roomCode: null, playerId: null });
-    server.addEventListener('message', ev => this.onMessage(clientId, ev.data));
-    server.addEventListener('close', () => this.disconnect(clientId));
-    server.addEventListener('error', () => this.disconnect(clientId));
+    this.clients.set(clientId, { ws: server });
+    server.addEventListener('message', e => this.msg(clientId, e.data));
+    server.addEventListener('close', () => this.drop(clientId));
+    server.addEventListener('error', () => this.drop(clientId));
     return new Response(null, { status: 101, webSocket: client });
   }
-
-  send(clientId, msg) { try { this.clients.get(clientId)?.ws.send(json(msg)); } catch {} }
-  broadcast(room, msg) { for (const p of room.players) this.send(p.clientId, msg); }
-  publicRooms() { return [...this.rooms.values()].filter(r => r.visibility === 'public').map(r => ({ code: r.code, count: r.players.length, host: r.players.find(p => p.id === r.hostId)?.username || 'Unknown' })); }
-  pushPublicList(clientId) { this.send(clientId, { type: 'publicRooms', rooms: this.publicRooms() }); }
-
-  onMessage(clientId, raw) {
-    let msg; try { msg = JSON.parse(raw); } catch { return; }
-    if (msg.type === 'listPublic') return this.pushPublicList(clientId);
-    if (msg.type === 'createRoom') return this.createRoom(clientId, msg);
-    if (msg.type === 'joinRoom') return this.joinRoom(clientId, msg);
-    if (msg.type === 'leaveRoom') return this.disconnect(clientId, true);
-    if (msg.type === 'move') return this.move(clientId, msg);
-    if (msg.type === 'kick') return this.kick(clientId, msg.targetId);
+  send(id, m) { try { this.clients.get(id)?.ws.send(json(m)); } catch {} }
+  cast(room, m) { room.players.forEach(p => this.send(p.clientId, m)); }
+  clean(room) {
+    return {
+      code: room.code,
+      visibility: room.visibility,
+      hostId: room.hostId,
+      hostName: room.players.find(p => p.id === room.hostId)?.username || 'Unknown',
+      players: room.players.map(({ clientId, ...p }) => p)
+    };
   }
-
-  createRoom(clientId, msg) {
+  publicRooms() {
+    return [...this.rooms.values()].filter(r => r.visibility === 'public').map(r => ({
+      code: r.code,
+      count: r.players.length,
+      host: r.players.find(p => p.id === r.hostId)?.username || 'Unknown'
+    }));
+  }
+  msg(clientId, raw) {
+    let m; try { m = JSON.parse(raw); } catch { return; }
+    if (m.type === 'listPublic') return this.send(clientId, { type: 'publicRooms', rooms: this.publicRooms() });
+    if (m.type === 'createRoom') return this.createRoom(clientId, m);
+    if (m.type === 'joinRoom') return this.joinRoom(clientId, m);
+    if (m.type === 'leaveRoom') return this.drop(clientId);
+    if (m.type === 'move') return this.move(clientId, m);
+    if (m.type === 'kick') return this.hostRemove(clientId, m.targetId);
+  }
+  makePlayer(clientId, username, isHost, x, z) {
+    return { id: crypto.randomUUID(), clientId, username, isHost, joinedAt: Date.now() + Math.random(), x, z, y: heightAt(x, z) + .5, rot: 0, lastMovedAt: Date.now(), isAfk: false };
+  }
+  createRoom(clientId, m) {
     const roomCode = code();
-    const player = this.makePlayer(clientId, msg.username || 'Host', true);
-    const room = { code: roomCode, visibility: msg.visibility === 'private' ? 'private' : 'public', hostId: player.id, players: [player] };
+    const p = this.makePlayer(clientId, m.username || 'Host', true, 0, 0);
+    const room = { code: roomCode, visibility: m.visibility === 'private' ? 'private' : 'public', hostId: p.id, players: [p] };
     this.rooms.set(roomCode, room);
-    this.clients.get(clientId).roomCode = roomCode;
-    this.clients.get(clientId).playerId = player.id;
-    this.send(clientId, { type: 'joined', room: this.cleanRoom(room), playerId: player.id });
-    this.broadcastPublicLists();
+    Object.assign(this.clients.get(clientId), { roomCode, playerId: p.id });
+    this.send(clientId, { type: 'joined', room: this.clean(room), playerId: p.id });
+    this.allPublic();
   }
-
-  joinRoom(clientId, msg) {
-    const room = this.rooms.get(String(msg.code || '').toUpperCase());
+  joinRoom(clientId, m) {
+    const room = this.rooms.get(String(m.code || '').toUpperCase());
     if (!room) return this.send(clientId, { type: 'error', message: 'No server found with that code.' });
-    const player = this.makePlayer(clientId, msg.username || 'Player', false);
-    room.players.push(player);
-    this.clients.get(clientId).roomCode = room.code;
-    this.clients.get(clientId).playerId = player.id;
-    this.send(clientId, { type: 'joined', room: this.cleanRoom(room), playerId: player.id });
-    this.broadcast(room, { type: 'roomUpdate', room: this.cleanRoom(room) });
-    this.broadcastPublicLists();
+    const spawn = room.players.length + 1;
+    const p = this.makePlayer(clientId, m.username || 'Player', false, spawn, spawn);
+    room.players.push(p);
+    Object.assign(this.clients.get(clientId), { roomCode: room.code, playerId: p.id });
+    this.send(clientId, { type: 'joined', room: this.clean(room), playerId: p.id });
+    this.cast(room, { type: 'roomUpdate', room: this.clean(room) });
+    this.allPublic();
   }
-
-  makePlayer(clientId, username, isHost) {
-    return { id: crypto.randomUUID(), clientId, username, isHost, joinedAt: Date.now() + Math.random(), x: 80 + Math.random() * 620, y: 100 + Math.random() * 380, lastMovedAt: Date.now(), isAfk: false };
+  move(clientId, m) {
+    const c = this.clients.get(clientId);
+    const room = this.rooms.get(c?.roomCode);
+    if (!room) return;
+    const p = room.players.find(q => q.id === c.playerId);
+    if (!p) return;
+    const dx = Number(m.dx || 0), dz = Number(m.dz || 0);
+    p.x = clamp(p.x + dx, -16, 16);
+    p.z = clamp(p.z + dz, -16, 16);
+    p.y = heightAt(p.x, p.z) + .5;
+    if (dx || dz) p.rot = Math.atan2(dx, dz);
+    p.lastMovedAt = Date.now();
+    p.isAfk = false;
+    this.cast(room, { type: 'roomUpdate', room: this.clean(room) });
   }
-
-  cleanRoom(room) {
-    return { code: room.code, visibility: room.visibility, hostId: room.hostId, hostName: room.players.find(p => p.id === room.hostId)?.username || 'Unknown', players: room.players.map(({ clientId, ...p }) => p) };
-  }
-
-  move(clientId, msg) {
-    const c = this.clients.get(clientId); if (!c?.roomCode) return;
-    const room = this.rooms.get(c.roomCode); if (!room) return;
-    const p = room.players.find(x => x.id === c.playerId); if (!p) return;
-    p.x = clamp(p.x + Number(msg.dx || 0), 20, 760); p.y = clamp(p.y + Number(msg.dy || 0), 20, 520);
-    p.lastMovedAt = Date.now(); p.isAfk = false;
-    this.broadcast(room, { type: 'roomUpdate', room: this.cleanRoom(room) });
-  }
-
-  kick(clientId, targetId) {
-    const c = this.clients.get(clientId); if (!c?.roomCode) return;
-    const room = this.rooms.get(c.roomCode); if (!room) return;
-    if (room.hostId !== c.playerId) return;
-    if (targetId === c.playerId) return;
-    const target = room.players.find(p => p.id === targetId); if (!target) return;
+  hostRemove(clientId, targetId) {
+    const c = this.clients.get(clientId);
+    const room = this.rooms.get(c?.roomCode);
+    if (!room || room.hostId !== c.playerId || targetId === c.playerId) return;
+    const target = room.players.find(p => p.id === targetId);
+    if (!target) return;
     this.send(target.clientId, { type: 'kicked' });
-    this.removePlayer(target.clientId, true);
+    this.drop(target.clientId);
   }
-
-  disconnect(clientId, intentional = false) {
-    this.removePlayer(clientId, intentional);
+  drop(clientId) {
+    const c = this.clients.get(clientId);
+    const room = this.rooms.get(c?.roomCode);
+    if (room) {
+      room.players = room.players.filter(p => p.clientId !== clientId);
+      if (!room.players.length) this.rooms.delete(room.code);
+      else {
+        if (!room.players.some(p => p.id === room.hostId)) {
+          const next = [...room.players].sort((a, b) => a.joinedAt - b.joinedAt)[0];
+          room.hostId = next.id;
+          room.players.forEach(p => p.isHost = p.id === next.id);
+        }
+        this.cast(room, { type: 'roomUpdate', room: this.clean(room) });
+      }
+    }
     try { this.clients.get(clientId)?.ws.close(); } catch {}
     this.clients.delete(clientId);
+    this.allPublic();
   }
-
-  removePlayer(clientId) {
-    const c = this.clients.get(clientId); if (!c?.roomCode) return;
-    const room = this.rooms.get(c.roomCode); if (!room) return;
-    room.players = room.players.filter(p => p.clientId !== clientId);
-    if (room.players.length === 0) this.rooms.delete(room.code);
-    else {
-      if (!room.players.some(p => p.id === room.hostId)) {
-        const nextHost = [...room.players].sort((a, b) => a.joinedAt - b.joinedAt)[0];
-        room.hostId = nextHost.id;
-        room.players = room.players.map(p => ({ ...p, isHost: p.id === nextHost.id }));
-      }
-      this.broadcast(room, { type: 'roomUpdate', room: this.cleanRoom(room) });
-    }
-    this.broadcastPublicLists();
-  }
-
-  checkAfk() {
+  afk() {
     const t = Date.now();
     for (const room of [...this.rooms.values()]) {
       for (const p of [...room.players]) {
         if (t - p.lastMovedAt >= AFK_MS) {
-          p.isAfk = true;
           this.send(p.clientId, { type: 'kicked' });
-          this.removePlayer(p.clientId);
+          this.drop(p.clientId);
         }
       }
     }
   }
-
-  broadcastPublicLists() { for (const clientId of this.clients.keys()) this.pushPublicList(clientId); }
+  allPublic() { for (const id of this.clients.keys()) this.send(id, { type: 'publicRooms', rooms: this.publicRooms() }); }
 }
