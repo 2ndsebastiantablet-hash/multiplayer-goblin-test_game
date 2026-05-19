@@ -1,0 +1,15 @@
+name = "multiplayer-goblin-test-game"
+main = "worker/index.js"
+compatibility_date = "2025-01-01"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomsDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomsDO"]
