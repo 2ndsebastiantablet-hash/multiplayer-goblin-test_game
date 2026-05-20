@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 
 const SIZE = 34;
 const HALF = Math.floor(SIZE / 2);
@@ -73,11 +74,25 @@ function label(model, text) {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
   s.position.y = 2.25; s.scale.set(2.7, .7, 1); model.add(s);
 }
+function hudTexture(room) {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgba(2,6,23,.82)'; ctx.fillRect(0, 0, 1024, 256);
+  ctx.fillStyle = '#67e8f9'; ctx.font = 'bold 54px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('Empire Planet Test VR', 512, 70);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 38px Arial';
+  ctx.fillText(`Code: ${room?.code || '---'}   Host: ${room?.hostName || '---'}`, 512, 135);
+  ctx.fillStyle = '#cbd5e1'; ctx.font = '30px Arial';
+  ctx.fillText('Left stick / WASD moves. Look around naturally in VR.', 512, 195);
+  return new THREE.CanvasTexture(c);
+}
 
-export default function VoxelWorld({ room, playerId }) {
+export default function VoxelWorld({ room, playerId, onMove }) {
   const mount = useRef(null);
   const data = useRef(null);
   const roomRef = useRef(room);
+  const lastVrMove = useRef(0);
   roomRef.current = room;
 
   useEffect(() => {
@@ -86,35 +101,62 @@ export default function VoxelWorld({ room, playerId }) {
     scene.background = new THREE.Color(0x87ceeb);
     scene.fog = new THREE.Fog(0x87ceeb, 18, 55);
     const camera = new THREE.PerspectiveCamera(75, mount.current.clientWidth / mount.current.clientHeight, .1, 1000);
+    const rig = new THREE.Group();
+    scene.add(rig);
+    rig.add(camera);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.xr.enabled = true;
     renderer.setSize(mount.current.clientWidth, mount.current.clientHeight);
     mount.current.innerHTML = '';
     mount.current.appendChild(renderer.domElement);
+    const vrButton = VRButton.createButton(renderer);
+    vrButton.classList.add('vrButton');
+    mount.current.appendChild(vrButton);
+    rig.add(renderer.xr.getController(0), renderer.xr.getController(1));
     scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.2));
     const sun = new THREE.DirectionalLight(0xffffff, 1.4);
     sun.position.set(18, 30, 12); scene.add(sun);
     buildWorld(scene);
-    data.current = { scene, camera, renderer, models: new Map() };
+    const hudMat = new THREE.MeshBasicMaterial({ map: hudTexture(roomRef.current), transparent: true });
+    const hud = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), hudMat);
+    hud.position.set(0, 2.25, -3.4);
+    rig.add(hud);
+    data.current = { scene, camera, renderer, rig, models: new Map(), hudMat };
     const resize = () => { if (!mount.current) return; camera.aspect = mount.current.clientWidth / mount.current.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(mount.current.clientWidth, mount.current.clientHeight); };
     addEventListener('resize', resize);
-    let raf;
-    const loop = () => {
+    renderer.setAnimationLoop(() => {
       const local = roomRef.current?.players?.find(p => p.id === playerId);
       if (local) {
-        camera.position.lerp(new THREE.Vector3(local.x, local.y + 1.45, local.z), .35);
-        const yaw = local.rot || 0;
-        camera.rotation.set(0, yaw, 0);
+        rig.position.lerp(new THREE.Vector3(local.x, local.y, local.z), .35);
+        if (!renderer.xr.isPresenting) rig.rotation.y = local.rot || 0;
+      }
+      if (renderer.xr.isPresenting && onMove) {
+        const session = renderer.xr.getSession();
+        const sources = session?.inputSources ? Array.from(session.inputSources) : [];
+        const pad = sources.find(s => s.gamepad)?.gamepad;
+        const a = pad?.axes || [];
+        const sx = Math.abs(a[2] || a[0] || 0) > .18 ? (a[2] || a[0]) : 0;
+        const sy = Math.abs(a[3] || a[1] || 0) > .18 ? (a[3] || a[1]) : 0;
+        const t = performance.now();
+        if ((sx || sy) && t - lastVrMove.current > 35) {
+          const forward = camera.getWorldDirection(new THREE.Vector3());
+          forward.y = 0; forward.normalize();
+          const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+          const delta = forward.multiplyScalar(-sy * .16).add(right.multiplyScalar(sx * .16));
+          onMove(delta.x, delta.z);
+          lastVrMove.current = t;
+        }
       }
       renderer.render(scene, camera);
-      raf = requestAnimationFrame(loop);
-    };
-    loop();
-    return () => { cancelAnimationFrame(raf); removeEventListener('resize', resize); renderer.dispose(); data.current = null; };
-  }, [playerId]);
+    });
+    return () => { removeEventListener('resize', resize); renderer.setAnimationLoop(null); renderer.dispose(); data.current = null; };
+  }, [playerId, onMove]);
 
   useEffect(() => {
     if (!data.current || !room) return;
-    const { scene, models } = data.current;
+    const { scene, models, hudMat } = data.current;
+    if (hudMat?.map) hudMat.map.dispose();
+    hudMat.map = hudTexture(room); hudMat.needsUpdate = true;
     const alive = new Set();
     for (const p of room.players) {
       alive.add(p.id);
@@ -132,5 +174,5 @@ export default function VoxelWorld({ room, playerId }) {
     for (const [id, model] of models) if (!alive.has(id)) { scene.remove(model); models.delete(id); }
   }, [room, playerId]);
 
-  return <div className="world" ref={mount}><p className="hint">First-person voxel world loading...</p></div>;
+  return <div className="world" ref={mount}><p className="hint">First-person WebXR world loading...</p></div>;
 }
