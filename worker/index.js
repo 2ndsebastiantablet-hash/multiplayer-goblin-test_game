@@ -7,11 +7,24 @@ const JUMP_VELOCITY = 0.34;
 const MAX_FALL = -0.75;
 const WORLD_MIN = -16;
 const WORLD_MAX = 16;
+const PLAYER_RADIUS = 0.32;
+const BLOCK_EPS = 0.06;
 
 function heightAt(x, z) {
   return Math.max(0, Math.floor(Math.sin(x * .33) * 1.6 + Math.cos(z * .27) * 1.4 + Math.sin((x + z) * .18) * 1.2 + 3));
 }
 function groundY(x, z) { return heightAt(Math.round(x), Math.round(z)) + .5; }
+function canOccupy(x, z, y) {
+  const samples = [[0, 0], [PLAYER_RADIUS, 0], [-PLAYER_RADIUS, 0], [0, PLAYER_RADIUS], [0, -PLAYER_RADIUS], [PLAYER_RADIUS, PLAYER_RADIUS], [PLAYER_RADIUS, -PLAYER_RADIUS], [-PLAYER_RADIUS, PLAYER_RADIUS], [-PLAYER_RADIUS, -PLAYER_RADIUS]];
+  for (const [ox, oz] of samples) {
+    if (groundY(x + ox, z + oz) > y + BLOCK_EPS) return false;
+  }
+  return true;
+}
+function supportedY(x, z) {
+  const samples = [[0, 0], [PLAYER_RADIUS, 0], [-PLAYER_RADIUS, 0], [0, PLAYER_RADIUS], [0, -PLAYER_RADIUS]];
+  return Math.max(...samples.map(([ox, oz]) => groundY(x + ox, z + oz)));
+}
 
 export default {
   async fetch(request, env) {
@@ -45,20 +58,10 @@ export class RoomsDO {
   send(id, m) { try { this.clients.get(id)?.ws.send(json(m)); } catch {} }
   cast(room, m) { room.players.forEach(p => this.send(p.clientId, m)); }
   clean(room) {
-    return {
-      code: room.code,
-      visibility: room.visibility,
-      hostId: room.hostId,
-      hostName: room.players.find(p => p.id === room.hostId)?.username || 'Unknown',
-      players: room.players.map(({ clientId, ...p }) => p)
-    };
+    return { code: room.code, visibility: room.visibility, hostId: room.hostId, hostName: room.players.find(p => p.id === room.hostId)?.username || 'Unknown', players: room.players.map(({ clientId, ...p }) => p) };
   }
   publicRooms() {
-    return [...this.rooms.values()].filter(r => r.visibility === 'public').map(r => ({
-      code: r.code,
-      count: r.players.length,
-      host: r.players.find(p => p.id === r.hostId)?.username || 'Unknown'
-    }));
+    return [...this.rooms.values()].filter(r => r.visibility === 'public').map(r => ({ code: r.code, count: r.players.length, host: r.players.find(p => p.id === r.hostId)?.username || 'Unknown' }));
   }
   msg(clientId, raw) {
     let m; try { m = JSON.parse(raw); } catch { return; }
@@ -70,7 +73,7 @@ export class RoomsDO {
     if (m.type === 'kick') return this.hostRemove(clientId, m.targetId);
   }
   makePlayer(clientId, username, isHost, x, z) {
-    return { id: crypto.randomUUID(), clientId, username, isHost, joinedAt: Date.now() + Math.random(), x, z, y: groundY(x, z), vy: 0, grounded: true, rot: 0, pitch: 0, lastMovedAt: Date.now(), isAfk: false };
+    return { id: crypto.randomUUID(), clientId, username, isHost, joinedAt: Date.now() + Math.random(), x, z, y: supportedY(x, z), vy: 0, grounded: true, rot: 0, pitch: 0, lastMovedAt: Date.now(), isAfk: false };
   }
   createRoom(clientId, m) {
     const roomCode = code();
@@ -98,36 +101,22 @@ export class RoomsDO {
     if (!room) return;
     const p = room.players.find(q => q.id === c.playerId);
     if (!p) return;
-
     const dx = clamp(Number(m.dx || 0), -.22, .22);
     const dz = clamp(Number(m.dz || 0), -.22, .22);
     p.rot = Number.isFinite(Number(m.rot)) ? Number(m.rot) : p.rot;
     p.pitch = Number.isFinite(Number(m.pitch)) ? Number(m.pitch) : p.pitch;
-
-    if (m.jump && p.grounded) {
-      p.vy = JUMP_VELOCITY;
-      p.grounded = false;
-    }
-
+    if (m.jump && p.grounded) { p.vy = JUMP_VELOCITY; p.grounded = false; }
     p.vy = clamp((p.vy || 0) - GRAVITY, MAX_FALL, JUMP_VELOCITY);
     p.y += p.vy;
 
     const tryX = clamp(p.x + dx, WORLD_MIN, WORLD_MAX);
+    if (canOccupy(tryX, p.z, p.y)) p.x = tryX;
     const tryZ = clamp(p.z + dz, WORLD_MIN, WORLD_MAX);
-    const targetGround = groundY(tryX, tryZ);
-    if (targetGround <= p.y + .08) {
-      p.x = tryX;
-      p.z = tryZ;
-    }
+    if (canOccupy(p.x, tryZ, p.y)) p.z = tryZ;
 
-    const currentGround = groundY(p.x, p.z);
-    if (p.y <= currentGround) {
-      p.y = currentGround;
-      p.vy = 0;
-      p.grounded = true;
-    } else {
-      p.grounded = false;
-    }
+    const floor = supportedY(p.x, p.z);
+    if (p.y <= floor) { p.y = floor; p.vy = 0; p.grounded = true; }
+    else p.grounded = false;
 
     p.lastMovedAt = Date.now();
     p.isAfk = false;
@@ -164,12 +153,7 @@ export class RoomsDO {
   afk() {
     const t = Date.now();
     for (const room of [...this.rooms.values()]) {
-      for (const p of [...room.players]) {
-        if (t - p.lastMovedAt >= AFK_MS) {
-          this.send(p.clientId, { type: 'kicked' });
-          this.drop(p.clientId);
-        }
-      }
+      for (const p of [...room.players]) if (t - p.lastMovedAt >= AFK_MS) { this.send(p.clientId, { type: 'kicked' }); this.drop(p.clientId); }
     }
   }
   allPublic() { for (const id of this.clients.keys()) this.send(id, { type: 'publicRooms', rooms: this.publicRooms() }); }
