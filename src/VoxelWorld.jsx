@@ -74,7 +74,7 @@ function label(model, text) {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
   s.position.y = 2.25; s.scale.set(2.7, .7, 1); model.add(s);
 }
-function hudTexture(room) {
+function hudTexture(room, locked) {
   const c = document.createElement('canvas');
   c.width = 1024; c.height = 256;
   const ctx = c.getContext('2d');
@@ -84,16 +84,18 @@ function hudTexture(room) {
   ctx.fillStyle = '#fff'; ctx.font = 'bold 38px Arial';
   ctx.fillText(`Code: ${room?.code || '---'}   Host: ${room?.hostName || '---'}`, 512, 135);
   ctx.fillStyle = '#cbd5e1'; ctx.font = '30px Arial';
-  ctx.fillText('Left stick / WASD moves. Look around naturally in VR.', 512, 195);
+  ctx.fillText(locked ? 'Mouse locked. ESC unlocks. Space jumps.' : 'Click world to lock mouse. WASD moves. Space jumps.', 512, 195);
   return new THREE.CanvasTexture(c);
 }
 
-export default function VoxelWorld({ room, playerId, onMove }) {
+export default function VoxelWorld({ room, playerId, onMove, look, onLockMouse }) {
   const mount = useRef(null);
   const data = useRef(null);
   const roomRef = useRef(room);
+  const lookRef = useRef(look || { yaw: 0, pitch: 0, locked: false });
   const lastVrMove = useRef(0);
   roomRef.current = room;
+  lookRef.current = look || lookRef.current;
 
   useEffect(() => {
     if (!mount.current) return;
@@ -101,9 +103,11 @@ export default function VoxelWorld({ room, playerId, onMove }) {
     scene.background = new THREE.Color(0x87ceeb);
     scene.fog = new THREE.Fog(0x87ceeb, 18, 55);
     const camera = new THREE.PerspectiveCamera(75, mount.current.clientWidth / mount.current.clientHeight, .1, 1000);
+    const pitchNode = new THREE.Group();
     const rig = new THREE.Group();
     scene.add(rig);
-    rig.add(camera);
+    rig.add(pitchNode);
+    pitchNode.add(camera);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.xr.enabled = true;
     renderer.setSize(mount.current.clientWidth, mount.current.clientHeight);
@@ -117,18 +121,21 @@ export default function VoxelWorld({ room, playerId, onMove }) {
     const sun = new THREE.DirectionalLight(0xffffff, 1.4);
     sun.position.set(18, 30, 12); scene.add(sun);
     buildWorld(scene);
-    const hudMat = new THREE.MeshBasicMaterial({ map: hudTexture(roomRef.current), transparent: true });
+    const hudMat = new THREE.MeshBasicMaterial({ map: hudTexture(roomRef.current, lookRef.current.locked), transparent: true });
     const hud = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), hudMat);
     hud.position.set(0, 2.25, -3.4);
     rig.add(hud);
-    data.current = { scene, camera, renderer, rig, models: new Map(), hudMat };
+    data.current = { scene, camera, renderer, rig, pitchNode, models: new Map(), hudMat };
     const resize = () => { if (!mount.current) return; camera.aspect = mount.current.clientWidth / mount.current.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(mount.current.clientWidth, mount.current.clientHeight); };
     addEventListener('resize', resize);
     renderer.setAnimationLoop(() => {
       const local = roomRef.current?.players?.find(p => p.id === playerId);
       if (local) {
         rig.position.lerp(new THREE.Vector3(local.x, local.y, local.z), .35);
-        if (!renderer.xr.isPresenting) rig.rotation.y = local.rot || 0;
+        if (!renderer.xr.isPresenting) {
+          rig.rotation.y = lookRef.current.yaw;
+          pitchNode.rotation.x = lookRef.current.pitch;
+        }
       }
       if (renderer.xr.isPresenting && onMove) {
         const session = renderer.xr.getSession();
@@ -137,13 +144,14 @@ export default function VoxelWorld({ room, playerId, onMove }) {
         const a = pad?.axes || [];
         const sx = Math.abs(a[2] || a[0] || 0) > .18 ? (a[2] || a[0]) : 0;
         const sy = Math.abs(a[3] || a[1] || 0) > .18 ? (a[3] || a[1]) : 0;
+        const jump = !!pad?.buttons?.some((b, i) => (i === 0 || i === 3) && b.pressed);
         const t = performance.now();
-        if ((sx || sy) && t - lastVrMove.current > 35) {
+        if ((sx || sy || jump) && t - lastVrMove.current > 35) {
           const forward = camera.getWorldDirection(new THREE.Vector3());
           forward.y = 0; forward.normalize();
           const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
           const delta = forward.multiplyScalar(-sy * .16).add(right.multiplyScalar(sx * .16));
-          onMove(delta.x, delta.z);
+          onMove(delta.x, delta.z, { jump });
           lastVrMove.current = t;
         }
       }
@@ -156,7 +164,7 @@ export default function VoxelWorld({ room, playerId, onMove }) {
     if (!data.current || !room) return;
     const { scene, models, hudMat } = data.current;
     if (hudMat?.map) hudMat.map.dispose();
-    hudMat.map = hudTexture(room); hudMat.needsUpdate = true;
+    hudMat.map = hudTexture(room, look?.locked); hudMat.needsUpdate = true;
     const alive = new Set();
     for (const p of room.players) {
       alive.add(p.id);
@@ -172,7 +180,7 @@ export default function VoxelWorld({ room, playerId, onMove }) {
       model.visible = !p.isAfk && p.id !== playerId;
     }
     for (const [id, model] of models) if (!alive.has(id)) { scene.remove(model); models.delete(id); }
-  }, [room, playerId]);
+  }, [room, playerId, look?.locked]);
 
-  return <div className="world" ref={mount}><p className="hint">First-person WebXR world loading...</p></div>;
+  return <div className="world" ref={mount} onClick={onLockMouse}><p className="hint">{look?.locked ? 'Mouse locked: look around. Space jumps. ESC unlocks.' : 'Click world to lock mouse. WASD moves. Space jumps.'}</p></div>;
 }
