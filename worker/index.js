@@ -2,9 +2,17 @@ const AFK_MS = 180000;
 const json = x => JSON.stringify(x);
 const code = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const GRAVITY = 0.035;
+const JUMP_VELOCITY = 0.34;
+const MAX_FALL = -0.75;
+const WORLD_MIN = -16;
+const WORLD_MAX = 16;
+
 function heightAt(x, z) {
   return Math.max(0, Math.floor(Math.sin(x * .33) * 1.6 + Math.cos(z * .27) * 1.4 + Math.sin((x + z) * .18) * 1.2 + 3));
 }
+function groundY(x, z) { return heightAt(Math.round(x), Math.round(z)) + .5; }
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -62,7 +70,7 @@ export class RoomsDO {
     if (m.type === 'kick') return this.hostRemove(clientId, m.targetId);
   }
   makePlayer(clientId, username, isHost, x, z) {
-    return { id: crypto.randomUUID(), clientId, username, isHost, joinedAt: Date.now() + Math.random(), x, z, y: heightAt(x, z) + .5, rot: 0, lastMovedAt: Date.now(), isAfk: false };
+    return { id: crypto.randomUUID(), clientId, username, isHost, joinedAt: Date.now() + Math.random(), x, z, y: groundY(x, z), vy: 0, grounded: true, rot: 0, pitch: 0, lastMovedAt: Date.now(), isAfk: false };
   }
   createRoom(clientId, m) {
     const roomCode = code();
@@ -90,11 +98,37 @@ export class RoomsDO {
     if (!room) return;
     const p = room.players.find(q => q.id === c.playerId);
     if (!p) return;
-    const dx = Number(m.dx || 0), dz = Number(m.dz || 0);
-    p.x = clamp(p.x + dx, -16, 16);
-    p.z = clamp(p.z + dz, -16, 16);
-    p.y = heightAt(p.x, p.z) + .5;
-    if (dx || dz) p.rot = Math.atan2(dx, dz);
+
+    const dx = clamp(Number(m.dx || 0), -.22, .22);
+    const dz = clamp(Number(m.dz || 0), -.22, .22);
+    p.rot = Number.isFinite(Number(m.rot)) ? Number(m.rot) : p.rot;
+    p.pitch = Number.isFinite(Number(m.pitch)) ? Number(m.pitch) : p.pitch;
+
+    if (m.jump && p.grounded) {
+      p.vy = JUMP_VELOCITY;
+      p.grounded = false;
+    }
+
+    p.vy = clamp((p.vy || 0) - GRAVITY, MAX_FALL, JUMP_VELOCITY);
+    p.y += p.vy;
+
+    const tryX = clamp(p.x + dx, WORLD_MIN, WORLD_MAX);
+    const tryZ = clamp(p.z + dz, WORLD_MIN, WORLD_MAX);
+    const targetGround = groundY(tryX, tryZ);
+    if (targetGround <= p.y + .08) {
+      p.x = tryX;
+      p.z = tryZ;
+    }
+
+    const currentGround = groundY(p.x, p.z);
+    if (p.y <= currentGround) {
+      p.y = currentGround;
+      p.vy = 0;
+      p.grounded = true;
+    } else {
+      p.grounded = false;
+    }
+
     p.lastMovedAt = Date.now();
     p.isAfk = false;
     this.cast(room, { type: 'roomUpdate', room: this.clean(room) });
