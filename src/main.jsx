@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import VoxelWorld from './VoxelWorld.jsx';
 import './styles.css';
@@ -49,6 +49,7 @@ function App() {
   function refresh() { send({ type: 'listPublic' }); }
   function leave() { send({ type: 'leaveRoom' }); setState({ screen: 'menu', room: null, playerId: null }); }
   function kick(id) { send({ type: 'kick', targetId: id }); }
+  const sendMove = useCallback((dx, dz) => send({ type: 'move', dx, dz }), []);
 
   useEffect(() => { connect(); const t = setInterval(refresh, 60000); return () => clearInterval(t); }, []);
   useEffect(() => {
@@ -67,31 +68,30 @@ function App() {
         if (keys.current.s || keys.current.arrowdown) dz += 0.16;
         if (keys.current.a || keys.current.arrowleft) dx -= 0.16;
         if (keys.current.d || keys.current.arrowright) dx += 0.16;
-        if (dx || dz) send({ type: 'move', dx, dz });
+        if (dx || dz) sendMove(dx, dz);
       }
       raf = requestAnimationFrame(loop);
     };
     loop();
     return () => cancelAnimationFrame(raf);
-  }, [state.screen]);
+  }, [state.screen, sendMove]);
 
   if (state.screen === 'menu') return <main className="menu">
     <section className="card">
       <h1>Empire Planet Test</h1>
-      <p>First-person desktop mode plus a separate WebXR VR mode for Meta Quest. Same backend, same rooms, same future game systems.</p>
+      <p>First-person desktop mode and WebXR VR mode are now in the same game screen. Create or join a room, then press Enter VR inside the 3D world on Meta Quest.</p>
       <label>Username</label><input value={name} onChange={e => setName(e.target.value)} />
       <div className="row"><button onClick={() => createRoom('public')}>Create Public</button><button onClick={() => createRoom('private')}>Create Private</button></div>
-      <a className="vrLink" href="/vr.html">Open VR Mode</a>
       <h2>Join Private</h2><div className="row"><input placeholder="CODE" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())}/><button onClick={() => joinRoom(roomCode)}>Join</button></div>
     </section>
     <section className="card"><div className="between"><h2>Public Servers</h2><button onClick={refresh}>Refresh</button></div>{rooms.length === 0 && <p>No public servers.</p>}{rooms.map(r => <div className="server" key={r.code}><b>{r.code}</b><span>{r.count} players • Host: {r.host}</span><button onClick={() => joinRoom(r.code)}>Join</button></div>)}</section>
   </main>;
 
   return <main className="game">
-    <header><div><small>{state.room.visibility} server</small><h1>Code: {state.room.code} <span>Host: {state.room.hostName}</span>{isHost && <em>You are host</em>}</h1></div><div className="row"><a className="vrLink small" href="/vr.html">VR Mode</a><button className="danger" onClick={leave}>Leave Server</button></div></header>
+    <header><div><small>{state.room.visibility} server</small><h1>Code: {state.room.code} <span>Host: {state.room.hostName}</span>{isHost && <em>You are host</em>}</h1></div><button className="danger" onClick={leave}>Leave Server</button></header>
     <section className="layout">
-      <VoxelWorld room={state.room} playerId={state.playerId} />
-      <aside className="card"><h2>Players</h2><p className="tiny">First-person desktop: WASD / arrow keys. VR: use Quest Browser and press Enter VR.</p>{state.room.players.map(p => <div className="player" key={p.id}><b>{p.username}</b><span>{p.isHost ? 'HOST' : p.isAfk ? 'AFK' : 'PLAYER'}</span>{isHost && p.id !== state.playerId && <button className="danger" onClick={() => kick(p.id)}>Kick</button>}</div>)}</aside>
+      <VoxelWorld room={state.room} playerId={state.playerId} onMove={sendMove} />
+      <aside className="card"><h2>Players</h2><p className="tiny">Desktop: first-person WASD / arrow keys. Quest: press Enter VR, look around, and move with the thumbstick.</p>{state.room.players.map(p => <div className="player" key={p.id}><b>{p.username}</b><span>{p.isHost ? 'HOST' : p.isAfk ? 'AFK' : 'PLAYER'}</span>{isHost && p.id !== state.playerId && <button className="danger" onClick={() => kick(p.id)}>Kick</button>}</div>)}</aside>
     </section>
   </main>;
 }
