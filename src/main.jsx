@@ -10,10 +10,13 @@ function App() {
   const [roomCode, setRoomCode] = useState('');
   const [rooms, setRooms] = useState([]);
   const [state, setState] = useState({ screen: 'menu', room: null, playerId: null });
+  const [look, setLook] = useState({ yaw: 0, pitch: 0, locked: false });
+  const lookRef = useRef(look);
   const ws = useRef(null);
   const keys = useRef({});
   const me = useMemo(() => state.room?.players?.find(p => p.id === state.playerId), [state]);
   const isHost = !!me?.isHost;
+  lookRef.current = look;
 
   function connect() {
     if (ws.current?.readyState === WebSocket.OPEN) return ws.current;
@@ -49,7 +52,7 @@ function App() {
   function refresh() { send({ type: 'listPublic' }); }
   function leave() { send({ type: 'leaveRoom' }); setState({ screen: 'menu', room: null, playerId: null }); }
   function kick(id) { send({ type: 'kick', targetId: id }); }
-  const sendMove = useCallback((dx, dz) => send({ type: 'move', dx, dz }), []);
+  const sendMove = useCallback((dx, dz, extra = {}) => send({ type: 'move', dx, dz, ...extra }), []);
 
   useEffect(() => { connect(); const t = setInterval(refresh, 60000); return () => clearInterval(t); }, []);
   useEffect(() => {
@@ -58,17 +61,37 @@ function App() {
     addEventListener('keydown', d); addEventListener('keyup', u);
     return () => { removeEventListener('keydown', d); removeEventListener('keyup', u); };
   }, []);
+  useEffect(() => {
+    const mouse = e => {
+      if (document.pointerLockElement !== document.body) return;
+      setLook(v => ({
+        yaw: v.yaw - e.movementX * 0.0025,
+        pitch: Math.max(-1.25, Math.min(1.25, v.pitch - e.movementY * 0.0025)),
+        locked: true
+      }));
+    };
+    const lockChange = () => setLook(v => ({ ...v, locked: document.pointerLockElement === document.body }));
+    addEventListener('mousemove', mouse);
+    document.addEventListener('pointerlockchange', lockChange);
+    return () => { removeEventListener('mousemove', mouse); document.removeEventListener('pointerlockchange', lockChange); };
+  }, []);
 
   useEffect(() => {
     let raf;
     const loop = () => {
       if (state.screen === 'game') {
-        let dx = 0, dz = 0;
-        if (keys.current.w || keys.current.arrowup) dz -= 0.16;
-        if (keys.current.s || keys.current.arrowdown) dz += 0.16;
-        if (keys.current.a || keys.current.arrowleft) dx -= 0.16;
-        if (keys.current.d || keys.current.arrowright) dx += 0.16;
-        if (dx || dz) sendMove(dx, dz);
+        const yaw = lookRef.current.yaw;
+        const forward = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
+        const right = { x: Math.cos(yaw), z: -Math.sin(yaw) };
+        let mx = 0, mz = 0;
+        if (keys.current.w || keys.current.arrowup) { mx += forward.x; mz += forward.z; }
+        if (keys.current.s || keys.current.arrowdown) { mx -= forward.x; mz -= forward.z; }
+        if (keys.current.a || keys.current.arrowleft) { mx -= right.x; mz -= right.z; }
+        if (keys.current.d || keys.current.arrowright) { mx += right.x; mz += right.z; }
+        const len = Math.hypot(mx, mz) || 1;
+        const moving = mx || mz;
+        const jump = !!keys.current[' '];
+        if (moving || jump) sendMove((mx / len) * 0.12, (mz / len) * 0.12, { jump, rot: yaw, pitch: lookRef.current.pitch });
       }
       raf = requestAnimationFrame(loop);
     };
@@ -90,8 +113,8 @@ function App() {
   return <main className="game">
     <header><div><small>{state.room.visibility} server</small><h1>Code: {state.room.code} <span>Host: {state.room.hostName}</span>{isHost && <em>You are host</em>}</h1></div><button className="danger" onClick={leave}>Leave Server</button></header>
     <section className="layout">
-      <VoxelWorld room={state.room} playerId={state.playerId} onMove={sendMove} />
-      <aside className="card"><h2>Players</h2><p className="tiny">Desktop: first-person WASD / arrow keys. Quest: press Enter VR, look around, and move with the thumbstick.</p>{state.room.players.map(p => <div className="player" key={p.id}><b>{p.username}</b><span>{p.isHost ? 'HOST' : p.isAfk ? 'AFK' : 'PLAYER'}</span>{isHost && p.id !== state.playerId && <button className="danger" onClick={() => kick(p.id)}>Kick</button>}</div>)}</aside>
+      <VoxelWorld room={state.room} playerId={state.playerId} onMove={sendMove} look={look} onLockMouse={() => document.body.requestPointerLock?.()} />
+      <aside className="card"><h2>Players</h2><p className="tiny">Click the world to lock mouse. Look with mouse. WASD moves. Space jumps. You can only climb block ledges by jumping.</p>{state.room.players.map(p => <div className="player" key={p.id}><b>{p.username}</b><span>{p.isHost ? 'HOST' : p.isAfk ? 'AFK' : 'PLAYER'}</span>{isHost && p.id !== state.playerId && <button className="danger" onClick={() => kick(p.id)}>Kick</button>}</div>)}</aside>
     </section>
   </main>;
 }
