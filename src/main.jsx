@@ -4,9 +4,16 @@ import VoxelWorld from './VoxelWorld.jsx';
 import './styles.css';
 
 const randomName = () => 'Player' + Math.floor(Math.random() * 9999);
+const CHARACTERS = [
+  { id: 'wizard', name: 'Wizard', role: 'Healer', desc: 'A goblin in a tall robe and pointy hat. Slower, support-focused.' },
+  { id: 'giant', name: 'Giant', role: 'Strength', desc: 'A huge armored goblin bruiser. Slow but strongest and tallest.' },
+  { id: 'dwarf', name: 'Dwarf', role: 'Infiltrator', desc: 'A tiny fast goblin sneaky scout. Short, quick, and hard to spot.' },
+  { id: 'captain', name: 'Captain', role: 'Leader / Foot Soldier', desc: 'A balanced goblin commander with a helmet and shield.' }
+];
 
 function App() {
   const [name, setName] = useState(localStorage.name || randomName());
+  const [character, setCharacter] = useState(localStorage.character || 'captain');
   const [roomCode, setRoomCode] = useState('');
   const [rooms, setRooms] = useState([]);
   const [state, setState] = useState({ screen: 'menu', room: null, playerId: null });
@@ -41,14 +48,9 @@ function App() {
     socket.readyState === WebSocket.OPEN ? go() : socket.addEventListener('open', go, { once: true });
   }
 
-  function createRoom(visibility) {
-    localStorage.name = name;
-    send({ type: 'createRoom', visibility, username: name || randomName() });
-  }
-  function joinRoom(c) {
-    localStorage.name = name;
-    send({ type: 'joinRoom', code: c.trim().toUpperCase(), username: name || randomName() });
-  }
+  function rememberChoice() { localStorage.name = name; localStorage.character = character; }
+  function createRoom(visibility) { rememberChoice(); send({ type: 'createRoom', visibility, username: name || randomName(), character }); }
+  function joinRoom(c) { rememberChoice(); send({ type: 'joinRoom', code: c.trim().toUpperCase(), username: name || randomName(), character }); }
   function refresh() { send({ type: 'listPublic' }); }
   function leave() { send({ type: 'leaveRoom' }); setState({ screen: 'menu', room: null, playerId: null }); }
   function kick(id) { send({ type: 'kick', targetId: id }); }
@@ -64,11 +66,7 @@ function App() {
   useEffect(() => {
     const mouse = e => {
       if (document.pointerLockElement !== document.body) return;
-      setLook(v => ({
-        yaw: v.yaw - e.movementX * 0.0025,
-        pitch: Math.max(-1.25, Math.min(1.25, v.pitch - e.movementY * 0.0025)),
-        locked: true
-      }));
+      setLook(v => ({ yaw: v.yaw - e.movementX * 0.0025, pitch: Math.max(-1.25, Math.min(1.25, v.pitch - e.movementY * 0.0025)), locked: true }));
     };
     const lockChange = () => setLook(v => ({ ...v, locked: document.pointerLockElement === document.body }));
     addEventListener('mousemove', mouse);
@@ -100,10 +98,11 @@ function App() {
   }, [state.screen, sendMove]);
 
   if (state.screen === 'menu') return <main className="menu">
-    <section className="card">
-      <h1>Empire Planet Test</h1>
-      <p>First-person desktop mode and WebXR VR mode are now in the same game screen. Create or join a room, then press Enter VR inside the 3D world on Meta Quest.</p>
+    <section className="card wideCard">
+      <h1>Choose Your Goblin Class</h1>
+      <p>Every player must pick one goblin before joining a server. The class changes your size, speed, height, and model.</p>
       <label>Username</label><input value={name} onChange={e => setName(e.target.value)} />
+      <div className="characterGrid">{CHARACTERS.map(c => <button key={c.id} className={'characterCard ' + (character === c.id ? 'selected' : '')} onClick={() => setCharacter(c.id)}><b>{c.name}</b><span>{c.role}</span><small>{c.desc}</small></button>)}</div>
       <div className="row"><button onClick={() => createRoom('public')}>Create Public</button><button onClick={() => createRoom('private')}>Create Private</button></div>
       <h2>Join Private</h2><div className="row"><input placeholder="CODE" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())}/><button onClick={() => joinRoom(roomCode)}>Join</button></div>
     </section>
@@ -114,7 +113,7 @@ function App() {
     <header><div><small>{state.room.visibility} server</small><h1>Code: {state.room.code} <span>Host: {state.room.hostName}</span>{isHost && <em>You are host</em>}</h1></div><button className="danger" onClick={leave}>Leave Server</button></header>
     <section className="layout">
       <VoxelWorld room={state.room} playerId={state.playerId} onMove={sendMove} look={look} onLockMouse={() => document.body.requestPointerLock?.()} />
-      <aside className="card"><h2>Players</h2><p className="tiny">Click the world to lock mouse. Look with mouse. WASD moves. Space jumps. You can only climb block ledges by jumping.</p>{state.room.players.map(p => <div className="player" key={p.id}><b>{p.username}</b><span>{p.isHost ? 'HOST' : p.isAfk ? 'AFK' : 'PLAYER'}</span>{isHost && p.id !== state.playerId && <button className="danger" onClick={() => kick(p.id)}>Kick</button>}</div>)}</aside>
+      <aside className="card"><h2>Players</h2><p className="tiny">Click world to lock mouse. WASD moves. Space jumps. Each goblin class has a different model, height, and speed.</p>{state.room.players.map(p => <div className="player" key={p.id}><b>{p.username}</b><span>{p.className || p.character || 'Goblin'} • {p.isHost ? 'HOST' : p.isAfk ? 'AFK' : 'PLAYER'}</span>{isHost && p.id !== state.playerId && <button className="danger" onClick={() => kick(p.id)}>Kick</button>}</div>)}</aside>
     </section>
   </main>;
 }
