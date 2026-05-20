@@ -4,6 +4,7 @@ import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 
 const SIZE = 34;
 const HALF = Math.floor(SIZE / 2);
+const EYE_HEIGHT = 1.35;
 
 function hash2(x, z) {
   let n = x * 374761393 + z * 668265263;
@@ -14,6 +15,7 @@ function heightAt(x, z) {
   const h = Math.sin(x * .33) * 1.6 + Math.cos(z * .27) * 1.4 + Math.sin((x + z) * .18) * 1.2 + hash2(x, z) * 1.5;
   return Math.max(0, Math.floor(h + 3));
 }
+function groundY(x, z) { return heightAt(Math.round(x), Math.round(z)) + .5; }
 function treeAt(x, z) {
   return heightAt(x, z) >= 3 && hash2(x + 99, z - 44) > .88 && Math.abs(x) > 2 && Math.abs(z) > 2;
 }
@@ -65,6 +67,65 @@ function pill(color) {
   }
   return g;
 }
+function makeLittlePerson(seed) {
+  const g = new THREE.Group();
+  const colors = [0xf97316, 0xa78bfa, 0x38bdf8, 0xfacc15, 0xfb7185, 0x34d399];
+  const bodyMat = new THREE.MeshLambertMaterial({ color: colors[seed % colors.length] });
+  const headMat = new THREE.MeshLambertMaterial({ color: 0xffd7a8 });
+  const handMat = new THREE.MeshLambertMaterial({ color: 0xffd7a8 });
+  const footMat = new THREE.MeshLambertMaterial({ color: 0x111827 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(.18, 12, 12), bodyMat);
+  body.scale.y = 1.25;
+  body.position.y = .42;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(.15, 12, 12), headMat);
+  head.position.y = .78;
+  const lh = new THREE.Mesh(new THREE.SphereGeometry(.07, 8, 8), handMat);
+  const rh = new THREE.Mesh(new THREE.SphereGeometry(.07, 8, 8), handMat);
+  lh.position.set(-.23, .43, 0);
+  rh.position.set(.23, .43, 0);
+  const lf = new THREE.Mesh(new THREE.SphereGeometry(.075, 8, 8), footMat);
+  const rf = new THREE.Mesh(new THREE.SphereGeometry(.075, 8, 8), footMat);
+  lf.position.set(-.09, .12, -.03);
+  rf.position.set(.09, .12, -.03);
+  g.add(body, head, lh, rh, lf, rf);
+  g.userData.parts = { lh, rh, lf, rf, body, head };
+  return g;
+}
+function spawnLittlePeople(scene) {
+  const people = [];
+  for (let i = 0; i < 18; i++) {
+    const angle = i * 2.399;
+    const radius = 4 + (i % 5) * 2.2;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const npc = makeLittlePerson(i);
+    npc.position.set(x, groundY(x, z), z);
+    npc.rotation.y = angle + Math.PI / 2;
+    npc.userData.walk = { homeX: x, homeZ: z, angle, speed: .35 + (i % 4) * .08, radius: 1.5 + (i % 3) * .6, phase: i * .7 };
+    scene.add(npc);
+    people.push(npc);
+  }
+  return people;
+}
+function updateLittlePeople(people, time) {
+  for (const npc of people) {
+    const w = npc.userData.walk;
+    const t = time * w.speed + w.phase;
+    const x = w.homeX + Math.cos(t) * w.radius;
+    const z = w.homeZ + Math.sin(t) * w.radius;
+    const y = groundY(x, z);
+    npc.position.lerp(new THREE.Vector3(x, y, z), .08);
+    npc.rotation.y = -t + Math.PI / 2;
+    const step = Math.sin(time * 8 + w.phase);
+    const parts = npc.userData.parts;
+    parts.lf.position.z = -.03 + step * .08;
+    parts.rf.position.z = -.03 - step * .08;
+    parts.lh.position.z = -step * .06;
+    parts.rh.position.z = step * .06;
+    parts.body.position.y = .42 + Math.abs(step) * .025;
+    parts.head.position.y = .78 + Math.abs(step) * .025;
+  }
+}
 function label(model, text) {
   const c = document.createElement('canvas');
   c.width = 512; c.height = 128;
@@ -104,6 +165,7 @@ export default function VoxelWorld({ room, playerId, onMove, look, onLockMouse }
     scene.fog = new THREE.Fog(0x87ceeb, 18, 55);
     const camera = new THREE.PerspectiveCamera(75, mount.current.clientWidth / mount.current.clientHeight, .1, 1000);
     const pitchNode = new THREE.Group();
+    pitchNode.position.y = EYE_HEIGHT;
     const rig = new THREE.Group();
     scene.add(rig);
     rig.add(pitchNode);
@@ -121,11 +183,12 @@ export default function VoxelWorld({ room, playerId, onMove, look, onLockMouse }
     const sun = new THREE.DirectionalLight(0xffffff, 1.4);
     sun.position.set(18, 30, 12); scene.add(sun);
     buildWorld(scene);
+    const people = spawnLittlePeople(scene);
     const hudMat = new THREE.MeshBasicMaterial({ map: hudTexture(roomRef.current, lookRef.current.locked), transparent: true });
     const hud = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), hudMat);
-    hud.position.set(0, 2.25, -3.4);
+    hud.position.set(0, 2.35, -3.4);
     rig.add(hud);
-    data.current = { scene, camera, renderer, rig, pitchNode, models: new Map(), hudMat };
+    data.current = { scene, camera, renderer, rig, pitchNode, models: new Map(), hudMat, people };
     const resize = () => { if (!mount.current) return; camera.aspect = mount.current.clientWidth / mount.current.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(mount.current.clientWidth, mount.current.clientHeight); };
     addEventListener('resize', resize);
     renderer.setAnimationLoop(() => {
@@ -137,6 +200,7 @@ export default function VoxelWorld({ room, playerId, onMove, look, onLockMouse }
           pitchNode.rotation.x = lookRef.current.pitch;
         }
       }
+      updateLittlePeople(people, performance.now() * .001);
       if (renderer.xr.isPresenting && onMove) {
         const session = renderer.xr.getSession();
         const sources = session?.inputSources ? Array.from(session.inputSources) : [];
@@ -182,5 +246,5 @@ export default function VoxelWorld({ room, playerId, onMove, look, onLockMouse }
     for (const [id, model] of models) if (!alive.has(id)) { scene.remove(model); models.delete(id); }
   }, [room, playerId, look?.locked]);
 
-  return <div className="world" ref={mount} onClick={onLockMouse}><p className="hint">{look?.locked ? 'Mouse locked: look around. Space jumps. ESC unlocks.' : 'Click world to lock mouse. WASD moves. Space jumps.'}</p></div>;
+  return <div className="world" ref={mount} onClick={onLockMouse}><p className="hint">{look?.locked ? 'Mouse locked: taller camera, collision fixed, space jumps.' : 'Click world to lock mouse. WASD moves. Space jumps.'}</p></div>;
 }
