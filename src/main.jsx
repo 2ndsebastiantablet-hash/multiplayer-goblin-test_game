@@ -10,9 +10,8 @@ const CHARACTERS = [
   { id: 'dwarf', name: 'Dwarf', role: 'Infiltrator', desc: 'A tiny fast goblin sneaky scout. Short, quick, and hard to spot.' },
   { id: 'captain', name: 'Captain', role: 'Leader / Foot Soldier', desc: 'A balanced goblin commander with a helmet and shield.' }
 ];
-const TERRAIN_TYPES = [
-  ['green_hills', 'Green Hills'], ['desolate_wasteland', 'Desolate Wasteland'], ['crystal_fields', 'Crystal Fields'], ['red_alien_plains', 'Red Alien Plains'], ['jagged_highlands', 'Jagged Highlands'], ['swamp_world', 'Swamp World'], ['frozen_planet', 'Frozen Planet'], ['ash_planet', 'Ash Planet'], ['mushroom_planet', 'Mushroom Planet'], ['floating_island_world', 'Floating Island World']
-];
+const TERRAIN_TYPES = [['green_hills','Green Hills'],['desolate_wasteland','Desolate Wasteland'],['crystal_fields','Crystal Fields'],['red_alien_plains','Red Alien Plains'],['jagged_highlands','Jagged Highlands'],['swamp_world','Swamp World'],['frozen_planet','Frozen Planet'],['ash_planet','Ash Planet'],['mushroom_planet','Mushroom Planet'],['floating_island_world','Floating Island World']];
+const PLANT_TRAITS = [['normal_trees','Normal Trees'],['no_trees','No Trees'],['dead_trees','Dead Trees'],['weird_alien_plants','Weird Alien Plants'],['giant_mushrooms','Giant Mushrooms'],['crystal_plants','Crystal Plants'],['eyeball_flowers','Eyeball Flowers'],['tall_grass_forest','Tall Grass Forest'],['meat_plants','Meat Plants'],['floating_plants','Floating Plants']];
 const DEFAULT_COLORS = { grass: '#4ade80', dirt: '#8b5a2b', stone: '#64748b', water: '#38bdf8', sky: '#87ceeb' };
 
 function App() {
@@ -21,7 +20,7 @@ function App() {
   const [roomCode, setRoomCode] = useState('');
   const [rooms, setRooms] = useState([]);
   const [planetOpen, setPlanetOpen] = useState(false);
-  const [planet, setPlanet] = useState({ name: 'Custom Planet', terrain: 'green_hills', colors: DEFAULT_COLORS });
+  const [planet, setPlanet] = useState({ name: 'Custom Planet', terrain: 'green_hills', flora: 'normal_trees', colors: DEFAULT_COLORS });
   const [state, setState] = useState({ screen: 'menu', room: null, playerId: null });
   const [look, setLook] = useState({ yaw: 0, pitch: 0, locked: false });
   const lookRef = useRef(look);
@@ -31,22 +30,7 @@ function App() {
   const isHost = !!me?.isHost;
   lookRef.current = look;
 
-  function connect() {
-    if (ws.current?.readyState === WebSocket.OPEN) return ws.current;
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.current = socket;
-    socket.onmessage = ev => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === 'publicRooms') setRooms(msg.rooms);
-      if (msg.type === 'joined') setState({ screen: 'game', room: msg.room, playerId: msg.playerId });
-      if (msg.type === 'roomUpdate') setState(s => s.room?.code === msg.room.code ? { ...s, room: msg.room } : s);
-      if (msg.type === 'kicked') setState({ screen: 'menu', room: null, playerId: null });
-      if (msg.type === 'error') alert(msg.message);
-    };
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'listPublic' }));
-    return socket;
-  }
+  function connect() { if (ws.current?.readyState === WebSocket.OPEN) return ws.current; const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'; const socket = new WebSocket(`${proto}//${location.host}/ws`); ws.current = socket; socket.onmessage = ev => { const msg = JSON.parse(ev.data); if (msg.type === 'publicRooms') setRooms(msg.rooms); if (msg.type === 'joined') setState({ screen: 'game', room: msg.room, playerId: msg.playerId }); if (msg.type === 'roomUpdate') setState(s => s.room?.code === msg.room.code ? { ...s, room: msg.room } : s); if (msg.type === 'kicked') setState({ screen: 'menu', room: null, playerId: null }); if (msg.type === 'error') alert(msg.message); }; socket.onopen = () => socket.send(JSON.stringify({ type: 'listPublic' })); return socket; }
   function send(msg) { const socket = connect(); const go = () => socket.send(JSON.stringify(msg)); socket.readyState === WebSocket.OPEN ? go() : socket.addEventListener('open', go, { once: true }); }
   function rememberChoice() { localStorage.name = name; localStorage.character = character; }
   function createRoom(visibility) { rememberChoice(); send({ type: 'createRoom', visibility, username: name || randomName(), character }); }
@@ -65,7 +49,7 @@ function App() {
 
   if (state.screen === 'menu') return <main className="menu"><section className="card wideCard"><h1>Choose Your Goblin Class</h1><p>Every player must pick one goblin before joining a server.</p><label>Username</label><input value={name} onChange={e => setName(e.target.value)} /><div className="characterGrid">{CHARACTERS.map(c => <button key={c.id} className={'characterCard ' + (character === c.id ? 'selected' : '')} onClick={() => setCharacter(c.id)}><b>{c.name}</b><span>{c.role}</span><small>{c.desc}</small></button>)}</div><div className="row"><button onClick={() => createRoom('public')}>Create Public</button><button onClick={() => createRoom('private')}>Create Private</button></div><h2>Join Private</h2><div className="row"><input placeholder="CODE" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())}/><button onClick={() => joinRoom(roomCode)}>Join</button></div></section><section className="card"><div className="between"><h2>Public Servers</h2><button onClick={refresh}>Refresh</button></div>{rooms.length === 0 && <p>No public servers.</p>}{rooms.map(r => <div className="server" key={r.code}><b>{r.code}</b><span>{r.count} players • {r.world || 'Planet'} • Host: {r.host}</span><button onClick={() => joinRoom(r.code)}>Join</button></div>)}</section></main>;
 
-  return <main className="game"><header><div><small>{state.room.visibility} server</small><h1>Code: {state.room.code} <span>{state.room.world?.name || 'Planet'}</span>{isHost && <em>You are host</em>}</h1></div><div className="row">{isHost && <button onClick={() => setPlanetOpen(v => !v)}>Create Planet</button>}<button className="danger" onClick={leave}>Leave Server</button></div></header>{planetOpen && isHost && <section className="planetPanel card"><div className="between"><h2>Create / Load Planet</h2><button onClick={() => setPlanetOpen(false)}>Close</button></div><label>Planet Name</label><input value={planet.name} onChange={e => setPlanet({ ...planet, name: e.target.value })}/><label>Terrain Type</label><select value={planet.terrain} onChange={e => setPlanet({ ...planet, terrain: e.target.value })}>{TERRAIN_TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select><div className="colorGrid">{Object.keys(DEFAULT_COLORS).map(k => <label key={k}>{k}<input type="color" value={planet.colors[k]} onChange={e => setPlanet({ ...planet, colors: { ...planet.colors, [k]: e.target.value } })}/></label>)}</div><button onClick={createPlanet}>Apply + Save Planet</button><h3>Saved Planets</h3><div className="savedWorlds">{(state.room.savedWorlds || []).map(w => <button key={w.id} onClick={() => loadPlanet(w.id)}>{w.name}<small>{w.terrainName}</small></button>)}</div></section>}<section className="layout"><VoxelWorld room={state.room} playerId={state.playerId} onMove={sendMove} look={look} onLockMouse={() => document.body.requestPointerLock?.()} /><aside className="card"><h2>Players</h2><p className="tiny">Host can create custom terrain planets and load saved planets.</p>{state.room.players.map(p => <div className="player" key={p.id}><b>{p.username}</b><span>{p.className || p.character || 'Goblin'} • {p.isHost ? 'HOST' : p.isAfk ? 'AFK' : 'PLAYER'}</span>{isHost && p.id !== state.playerId && <button className="danger" onClick={() => kick(p.id)}>Kick</button>}</div>)}</aside></section></main>;
+  return <main className="game"><header><div><small>{state.room.visibility} server</small><h1>Code: {state.room.code} <span>{state.room.world?.name || 'Planet'}</span>{isHost && <em>You are host</em>}</h1></div><div className="row">{isHost && <button onClick={() => setPlanetOpen(v => !v)}>Create Planet</button>}<button className="danger" onClick={leave}>Leave Server</button></div></header>{planetOpen && isHost && <section className="planetPanel card"><div className="between"><h2>Create / Load Planet</h2><button onClick={() => setPlanetOpen(false)}>Close</button></div><label>Planet Name</label><input value={planet.name} onChange={e => setPlanet({ ...planet, name: e.target.value })}/><label>Terrain Type</label><select value={planet.terrain} onChange={e => setPlanet({ ...planet, terrain: e.target.value })}>{TERRAIN_TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select><label>Plant / Tree Trait</label><select value={planet.flora} onChange={e => setPlanet({ ...planet, flora: e.target.value })}>{PLANT_TRAITS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select><div className="colorGrid">{Object.keys(DEFAULT_COLORS).map(k => <label key={k}>{k}<input type="color" value={planet.colors[k]} onChange={e => setPlanet({ ...planet, colors: { ...planet.colors, [k]: e.target.value } })}/></label>)}</div><button onClick={createPlanet}>Apply + Save Planet</button><h3>Saved Planets</h3><div className="savedWorlds">{(state.room.savedWorlds || []).map(w => <button key={w.id} onClick={() => loadPlanet(w.id)}>{w.name}<small>{w.terrainName} • {w.floraName || 'Plants'}</small></button>)}</div></section>}<section className="layout"><VoxelWorld room={state.room} playerId={state.playerId} onMove={sendMove} look={look} onLockMouse={() => document.body.requestPointerLock?.()} /><aside className="card"><h2>Players</h2><p className="tiny">Host can create custom terrain and plant planets.</p>{state.room.players.map(p => <div className="player" key={p.id}><b>{p.username}</b><span>{p.className || p.character || 'Goblin'} • {p.isHost ? 'HOST' : p.isAfk ? 'AFK' : 'PLAYER'}</span>{isHost && p.id !== state.playerId && <button className="danger" onClick={() => kick(p.id)}>Kick</button>}</div>)}</aside></section></main>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
