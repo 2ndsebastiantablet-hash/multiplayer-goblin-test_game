@@ -22,16 +22,14 @@ export function createVRWorldMenu({ optionLists, onCreatePlanet }) {
   const raycaster = new THREE.Raycaster(), temp = new THREE.Matrix4();
   const choices = { name: 'VR Planet', terrain: 'green_hills', flora: 'normal_trees', atmosphere: 'clear_blue_sky', structure: 'none' };
   const buttons = [];
-  const lists = {
-    terrain: optionLists?.terrain || [],
-    flora: optionLists?.flora || [],
-    atmosphere: optionLists?.atmosphere || [],
-    structure: optionLists?.structure || []
-  };
+  const lists = { terrain: optionLists?.terrain || [], flora: optionLists?.flora || [], atmosphere: optionLists?.atmosphere || [], structure: optionLists?.structure || [] };
   const labels = { terrain:'Terrain', flora:'Plants', atmosphere:'Sky', structure:'Structures' };
   const keys = ['terrain','flora','atmosphere','structure'];
+  let onVisibilityChange = null;
   function labelFor(key) { return lists[key].find(([id]) => id === choices[key])?.[1] || choices[key]; }
   function cycle(key, dir) { const list = lists[key]; const i = Math.max(0, list.findIndex(([id]) => id === choices[key])); choices[key] = list[(i + dir + list.length) % list.length]?.[0] || choices[key]; rebuild(); }
+  function setVisible(v) { group.visible = v; onVisibilityChange?.(v); }
+  function applyPlanet() { setVisible(false); setTimeout(() => onCreatePlanet?.({ ...choices }), 80); }
   function rebuild() {
     while (buttons.length) { const b = buttons.pop(); group.remove(b); clean(b); }
     const title = btn('CREATE PLANET', 'Y opens/closes. Aim pointer + trigger to select.', 0, 1.55, null, true, 2.55); buttons.push(title); group.add(title);
@@ -42,7 +40,7 @@ export function createVRWorldMenu({ optionLists, onCreatePlanet }) {
       const next = btn('>', labels[key], 1.6, y, () => cycle(key, 1), false, .7);
       buttons.push(prev, mid, next); group.add(prev, mid, next);
     });
-    const apply = btn('APPLY + SAVE', 'build selected planet', 0, -1.85, () => onCreatePlanet?.({ ...choices }), false, 2.4);
+    const apply = btn('APPLY + SAVE', 'build selected planet', 0, -1.85, applyPlanet, false, 2.4);
     buttons.push(apply); group.add(apply);
   }
   rebuild();
@@ -55,5 +53,5 @@ export function createVRWorldMenu({ optionLists, onCreatePlanet }) {
     hit?.object?.userData?.action?.();
   }
   function dispose() { while (buttons.length) clean(buttons.pop()); }
-  return { group, click, toggle(){ group.visible = !group.visible; }, dispose };
+  return { group, click, toggle(){ setVisible(!group.visible); }, setPointerVisibilityCallback(fn){ onVisibilityChange = fn; }, dispose };
 }
