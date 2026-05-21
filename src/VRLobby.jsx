@@ -29,9 +29,10 @@ export default function VRLobby({ character, setCharacter, createRoom, joinFirst
   function runAfterEndingLobbyXR(action) {
     if (live.current.joining) return;
     live.current.joining = true;
+    window.__AUTO_REENTER_GOBLIN_VR = true;
     const renderer = live.current.renderer;
     const session = renderer?.xr?.getSession?.();
-    const go = () => setTimeout(() => { action(); live.current.joining = false; }, 80);
+    const go = () => { action(); live.current.joining = false; };
     if (session) session.end().then(go).catch(go);
     else go();
   }
