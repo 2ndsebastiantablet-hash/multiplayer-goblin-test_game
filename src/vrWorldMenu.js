@@ -1,22 +1,24 @@
 import * as THREE from 'three';
 
 function tex(title, sub = '', selected = false) {
-  const c = document.createElement('canvas'); c.width = 1024; c.height = 220;
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 240;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = selected ? 'rgba(250,204,21,.95)' : 'rgba(15,23,42,.92)'; ctx.fillRect(0,0,c.width,c.height);
+  ctx.fillStyle = selected ? 'rgba(250,204,21,.96)' : 'rgba(15,23,42,.94)'; ctx.fillRect(0,0,c.width,c.height);
   ctx.strokeStyle = selected ? '#fff' : '#67e8f9'; ctx.lineWidth = 10; ctx.strokeRect(8,8,c.width-16,c.height-16);
-  ctx.fillStyle = selected ? '#111827' : '#fff'; ctx.font = 'bold 46px Arial'; ctx.textAlign = 'center'; ctx.fillText(title,512,88);
-  ctx.fillStyle = selected ? '#1f2937' : '#cbd5e1'; ctx.font = '30px Arial'; ctx.fillText(sub,512,145);
+  ctx.fillStyle = selected ? '#111827' : '#fff'; ctx.font = 'bold 42px Arial'; ctx.textAlign = 'center'; ctx.fillText(title,512,92);
+  ctx.fillStyle = selected ? '#1f2937' : '#cbd5e1'; ctx.font = '28px Arial'; ctx.fillText(sub,512,150);
   return new THREE.CanvasTexture(c);
 }
-function btn(title, sub, x, y, action, selected = false) {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(1.75,.38), new THREE.MeshBasicMaterial({ map: tex(title, sub, selected), transparent: true }));
+function btn(title, sub, x, y, action, selected = false, w = 1.95) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w,.42), new THREE.MeshBasicMaterial({ map: tex(title, sub, selected), transparent: true }));
   m.position.set(x,y,0); m.userData.action = action; return m;
 }
 function clean(m){m.material?.map?.dispose?.();m.material?.dispose?.();m.geometry?.dispose?.();}
 
 export function createVRWorldMenu({ optionLists, onCreatePlanet }) {
-  const group = new THREE.Group(); group.visible = false; group.position.set(0, 1.55, -2.4);
+  const group = new THREE.Group();
+  group.visible = false;
+  group.position.set(0, 1.5, -3.05);
   const raycaster = new THREE.Raycaster(), temp = new THREE.Matrix4();
   const choices = { name: 'VR Planet', terrain: 'green_hills', flora: 'normal_trees', atmosphere: 'clear_blue_sky', structure: 'none' };
   const buttons = [];
@@ -32,15 +34,15 @@ export function createVRWorldMenu({ optionLists, onCreatePlanet }) {
   function cycle(key, dir) { const list = lists[key]; const i = Math.max(0, list.findIndex(([id]) => id === choices[key])); choices[key] = list[(i + dir + list.length) % list.length]?.[0] || choices[key]; rebuild(); }
   function rebuild() {
     while (buttons.length) { const b = buttons.pop(); group.remove(b); clean(b); }
-    const title = btn('CREATE PLANET', 'Y opens/closes. Trigger selects buttons.', 0, 1.15, null, true); buttons.push(title); group.add(title);
+    const title = btn('CREATE PLANET', 'Y opens/closes. Aim pointer + trigger to select.', 0, 1.55, null, true, 2.55); buttons.push(title); group.add(title);
     keys.forEach((key, row) => {
-      const y = .55 - row * .45;
-      const prev = btn('<', labels[key], -1.15, y, () => cycle(key, -1));
-      const mid = btn(labelFor(key), labels[key], 0, y, null, true);
-      const next = btn('>', labels[key], 1.15, y, () => cycle(key, 1));
+      const y = .82 - row * .62;
+      const prev = btn('<', labels[key], -1.6, y, () => cycle(key, -1), false, .7);
+      const mid = btn(labelFor(key), labels[key], 0, y, null, true, 1.95);
+      const next = btn('>', labels[key], 1.6, y, () => cycle(key, 1), false, .7);
       buttons.push(prev, mid, next); group.add(prev, mid, next);
     });
-    const apply = btn('APPLY + SAVE', 'build selected planet', 0, -1.45, () => onCreatePlanet?.({ ...choices }));
+    const apply = btn('APPLY + SAVE', 'build selected planet', 0, -1.85, () => onCreatePlanet?.({ ...choices }), false, 2.4);
     buttons.push(apply); group.add(apply);
   }
   rebuild();
