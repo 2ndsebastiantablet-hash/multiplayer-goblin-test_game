@@ -19,22 +19,31 @@ function clean(mesh) { mesh.material?.map?.dispose?.(); mesh.material?.dispose?.
 
 export default function VRLobby({ character, setCharacter, createRoom, joinFirstPublic, rooms }) {
   const mount = useRef(null);
-  const live = useRef({ character, rooms, setCharacter, createRoom, joinFirstPublic, rebuild: null });
+  const live = useRef({ character, rooms, setCharacter, createRoom, joinFirstPublic, rebuild: null, renderer: null, joining: false });
   live.current.character = character;
   live.current.rooms = rooms;
   live.current.setCharacter = setCharacter;
   live.current.createRoom = createRoom;
   live.current.joinFirstPublic = joinFirstPublic;
 
-  useEffect(() => {
-    if (live.current.rebuild) live.current.rebuild();
-  }, [character, rooms]);
+  function runAfterEndingLobbyXR(action) {
+    if (live.current.joining) return;
+    live.current.joining = true;
+    const renderer = live.current.renderer;
+    const session = renderer?.xr?.getSession?.();
+    const go = () => setTimeout(() => { action(); live.current.joining = false; }, 80);
+    if (session) session.end().then(go).catch(go);
+    else go();
+  }
+
+  useEffect(() => { if (live.current.rebuild) live.current.rebuild(); }, [character, rooms]);
 
   useEffect(() => {
     if (!mount.current) return;
     const scene = new THREE.Scene(); scene.background = new THREE.Color('#020617');
     const camera = new THREE.PerspectiveCamera(70, mount.current.clientWidth / mount.current.clientHeight, .1, 100); camera.position.set(0, 1.65, 0);
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }); renderer.xr.enabled = true; renderer.setSize(mount.current.clientWidth, mount.current.clientHeight);
+    live.current.renderer = renderer;
     mount.current.innerHTML = ''; mount.current.appendChild(renderer.domElement);
     const vrButton = VRButton.createButton(renderer); vrButton.classList.add('vrButton'); mount.current.appendChild(vrButton);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.3));
@@ -45,10 +54,10 @@ export default function VRLobby({ character, setCharacter, createRoom, joinFirst
       while (buttons.length) { const b = buttons.pop(); panel.remove(b); clean(b); }
       const title = makeButton('GOBLIN VR LOBBY', 'Aim + trigger to select. Use this before entering the game.', 0, 1.1, null, true); buttons.push(title); panel.add(title);
       classes.forEach(([id, label], i) => { const b = makeButton(label, live.current.character === id ? 'SELECTED' : 'choose class', i % 2 ? 1.1 : -1.1, .35 - Math.floor(i / 2) * .6, () => live.current.setCharacter(id), live.current.character === id); buttons.push(b); panel.add(b); });
-      const pub = makeButton('CREATE PUBLIC', 'start shared server', -1.1, -1.15, () => live.current.createRoom('public'));
-      const priv = makeButton('CREATE PRIVATE', 'start code server', 1.1, -1.15, () => live.current.createRoom('private'));
-      const join = makeButton('JOIN PUBLIC', live.current.rooms?.length ? 'join first public server' : 'no public servers', 0, -1.75, () => live.current.joinFirstPublic());
-      buttons.push(pub, priv, join); panel.add(pub, priv, join);
+      buttons.push(makeButton('CREATE PUBLIC', 'start shared server', -1.1, -1.15, () => runAfterEndingLobbyXR(() => live.current.createRoom('public'))));
+      buttons.push(makeButton('CREATE PRIVATE', 'start code server', 1.1, -1.15, () => runAfterEndingLobbyXR(() => live.current.createRoom('private'))));
+      buttons.push(makeButton('JOIN PUBLIC', live.current.rooms?.length ? 'join first public server' : 'no public servers', 0, -1.75, () => runAfterEndingLobbyXR(() => live.current.joinFirstPublic())));
+      for (const b of buttons.slice(-3)) panel.add(b);
     }
     live.current.rebuild = rebuild;
     rebuild();
@@ -68,7 +77,14 @@ export default function VRLobby({ character, setCharacter, createRoom, joinFirst
     addController(0); addController(1);
     const resize = () => { if (!mount.current) return; camera.aspect = mount.current.clientWidth / mount.current.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(mount.current.clientWidth, mount.current.clientHeight); };
     addEventListener('resize', resize); renderer.setAnimationLoop(() => renderer.render(scene, camera));
-    return () => { live.current.rebuild = null; removeEventListener('resize', resize); renderer.setAnimationLoop(null); renderer.dispose(); scene.traverse(o => { if (o.geometry) o.geometry.dispose?.(); if (o.material) { o.material.map?.dispose?.(); o.material.dispose?.(); } }); };
+    return () => {
+      live.current.rebuild = null; live.current.renderer = null;
+      removeEventListener('resize', resize);
+      const session = renderer.xr.getSession?.();
+      if (session) session.end().catch?.(() => {});
+      renderer.setAnimationLoop(null); renderer.dispose();
+      scene.traverse(o => { if (o.geometry) o.geometry.dispose?.(); if (o.material) { o.material.map?.dispose?.(); o.material.dispose?.(); } });
+    };
   }, []);
 
   return <section className="card vrLobbyCard"><h2>VR Lobby</h2><p className="tiny">Quest/Oculus: press Enter VR here, aim at buttons, and use either trigger to select.</p><div className="vrLobby" ref={mount}></div></section>;
